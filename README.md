@@ -6,5 +6,5 @@
 - 🚀 Installation et Utilisation Cloner le dépôt :Bashgit clone https://github.com/ton-pseudo/pyasset.git
 Lancer l'application :Bashpython Jeux.py
 (Note : Le script crée automatiquement le fichier inventaire.db au premier lancement.)
-📂 Structure de la Base de DonnéesLe projet s'appuie sur une table materiel structurée comme suit :  id_materiel : Clé primaire auto-incrémentée.  designation : Nom de l'équipement.  categorie : Type de matériel (PC, Réseau, etc.).  etat : État de fonctionnement (Neuf, Maintenance, etc.).  date_ajout : Date d'enregistrement automatique.
-🛡️ SécuritéProtection contre les injections SQL via l'utilisation systématique de requêtes paramétrées (placeholders ?).  Gestion sécurisée des ressources avec des Context Managers (with sqlite3.connect...).
+- 📂 Structure de la Base de DonnéesLe projet s'appuie sur une table materiel structurée comme suit :  id_materiel : Clé primaire auto-incrémentée.  designation : Nom de l'équipement.  categorie : Type de matériel (PC, Réseau, etc.).  etat : État de fonctionnement (Neuf, Maintenance, etc.).  date_ajout : Date d'enregistrement automatique.
+- 🛡️ SécuritéProtection contre les injections SQL via l'utilisation systématique de requêtes paramétrées (placeholders ?).  Gestion sécurisée des ressources avec des Context Managers (with sqlite3.connect...).
