@@ -1,4 +1,5 @@
 **🖥️ PyAsset **
+
 - Gestionnaire de Patrimoine InformatiquePyAsset est une application de bureau légère développée en Python permettant aux administrateurs systèmes ou techniciens de proximité de suivre l'inventaire du matériel informatique au sein d'une organisation.
 - 📋 Présentation du projetCe projet a été réalisé dans le cadre du BTS SIO (Services Informatiques aux Organisations) pour valider les compétences liées à la gestion du patrimoine et au développement d'applications.  L'application permet de centraliser les informations relatives aux équipements (PC, Tablettes, Bornes réseau) dans une base de données locale sécurisée.
 - ✨ FonctionnalitésInventaire complet : Affichage de tous les équipements dans un tableau dynamique (Treeview).  Gestion CRUD : Ajout et suppression de matériel avec mise à jour instantanée de la base de données.  Recherche dynamique : Filtrage en temps réel des équipements par leur désignation.  Exportation de données : Possibilité d'exporter l'inventaire au format CSV pour une exploitation sous Excel.Persistance des données : Utilisation de SQLite pour un stockage fiable sans configuration complexe.
