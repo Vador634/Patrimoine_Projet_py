@@ -1,89 +1,77 @@
----
+# PyAsset — Gestion du patrimoine informatique
 
-# 🖥️ PyAsset - Gestionnaire de Patrimoine Informatique
+![Python](https://img.shields.io/badge/Python-3.8%2B-blue?logo=python&logoColor=white)
+![SQLite](https://img.shields.io/badge/SQLite-3-003B57?logo=sqlite&logoColor=white)
+![Tkinter](https://img.shields.io/badge/Interface-Tkinter-informational)
 
-![Python](https://img.shields.io/badge/Python-3.x-blue?style=for-the-badge&logo=python)
-![SQLite](https://img.shields.io/badge/SQLite-3-003B57?style=for-the-badge&logo=sqlite)
-![Interface](https://img.shields.io/badge/Interface-Tkinter-red?style=for-the-badge)
+Application de bureau en **Python** pour inventorier le matériel informatique d'une organisation : postes, portables, tablettes, équipements réseau, imprimantes…
+Pensée pour un technicien de proximité : tout est stocké dans une base **SQLite** locale, sans serveur ni installation.
 
-**PyAsset** est une application de bureau légère développée en **Python** permettant aux administrateurs systèmes ou techniciens de proximité de suivre l'inventaire du matériel informatique au sein d'une organisation[cite: 4].
+> Projet réalisé pour le BTS SIO option SLAM (épreuve E6).
 
----
+![Fenêtre principale de PyAsset](docs/capture.png)
 
-## 📸 Captures d'écran
+## Fonctionnalités
 
-<img width="801" height="679" alt="image" src="https://github.com/user-attachments/assets/5937a0e4-a526-474e-be63-07b3768d4037" />
+- **Ajout, modification et suppression** de matériel. Un clic sur une ligne la charge dans le formulaire ; la suppression accepte plusieurs lignes à la fois, avec confirmation.
+- **Recherche instantanée** par désignation et **filtre par catégorie**.
+- **Tri** du tableau en cliquant sur les en-têtes de colonnes (sans tenir compte des majuscules ni des accents).
+- **Mise en évidence** du matériel en maintenance (orange) ou hors service (rouge), avec un compteur dans la barre d'état.
+- **Export CSV** des lignes affichées, directement lisible dans Excel (accents et séparateur `;`).
 
-![Interface Principale](assets/main_ui.png)  
-*Interface de gestion avec le tableau de bord et le formulaire d'ajout.*
+## Lancer l'application
 
----
+Python 3.8 ou plus suffit : Tkinter et SQLite sont inclus dans Python, il n'y a aucune dépendance à installer.
 
-## 📋 Présentation du projet
-Ce projet a été réalisé dans le cadre du **BTS SIO (Services Informatiques aux Organisations)** pour valider les compétences liées à la gestion du patrimoine et au développement d'applications[cite: 4]. 
-
-L'application permet de centraliser les informations relatives aux équipements (PC, Tablettes, Bornes réseau) dans une base de données locale sécurisée[cite: 4].
-
----
-
-## ✨ Fonctionnalités
-*   **🔍 Recherche dynamique :** Filtrage en temps réel des équipements par leur désignation[cite: 4].
-*   **📊 Inventaire complet :** Affichage de tous les équipements dans un tableau dynamique (Treeview)[cite: 4].
-*   **⚙️ Gestion CRUD :** Ajout et suppression de matériel avec mise à jour instantanée de la base de données[cite: 4].
-*   **📄 Exportation de données :** Possibilité d'exporter l'inventaire au format **CSV** pour une exploitation sous Excel[cite: 4].
-*   **💾 Persistance des données :** Utilisation de **SQLite** pour un stockage fiable sans configuration complexe[cite: 4].
-
----
-
-## 🛠️ Technologies utilisées
-*   **Langage :** Python 3.x[cite: 4]
-*   **Interface Graphique :** Tkinter[cite: 4]
-*   **Base de Données :** SQLite3 (base de données relationnelle embarquée)[cite: 4]
-*   **Format d'export :** CSV[cite: 4]
-
----
-
-## 🚀 Installation et Utilisation
-
-### 1. Cloner le dépôt
 ```bash
 git clone https://github.com/Vador634/Patrimoine_Projet_py.git
 cd Patrimoine_Projet_py
+python Patrimoine.py
 ```
 
-### 2. Lancer l'application
+La base `inventaire.db` est créée automatiquement à côté du script au premier lancement.
+
+> Sous Linux, Tkinter s'installe parfois à part : `sudo apt install python3-tk`.
+
+## Tests
+
+La logique d'accès aux données est séparée de l'interface, ce qui permet de la tester sans ouvrir de fenêtre :
+
 ```bash
-python Jeux.py
+python -m unittest discover -s tests -v
 ```
-> **Note :** Le script crée automatiquement le fichier `inventaire.db` au premier lancement si celui-ci n'existe pas[cite: 4].
 
----
+Les tests couvrent l'ajout, la validation, la modification, la suppression multiple, la recherche et le filtre, la résistance aux injections SQL, l'export CSV et le tri.
 
-## 📂 Structure de la Base de Données
-Le projet s'appuie sur une table `materiel` structurée comme suit[cite: 3, 4] :
+## Base de données
+
+Une table `materiel` :
 
 | Colonne | Type | Description |
 | :--- | :--- | :--- |
-| **id_materiel** | INTEGER | Clé primaire auto-incrémentée[cite: 3, 4] |
-| **designation** | TEXT | Nom ou modèle de l'équipement[cite: 3, 4] |
-| **categorie** | TEXT | Type de matériel (PC, Réseau, etc.)[cite: 3, 4] |
-| **etat** | TEXT | État de fonctionnement (Neuf, Maintenance, etc.)[cite: 3, 4] |
-| **date_ajout** | TEXT | Date d'enregistrement automatique[cite: 3, 4] |
+| `id_materiel` | INTEGER | Clé primaire auto-incrémentée |
+| `designation` | TEXT | Nom ou modèle de l'équipement (100 caractères max.) |
+| `categorie` | TEXT | PC, Portable, Tablette, Réseau, Imprimante ou Autre |
+| `etat` | TEXT | Neuf, Utilisé, Maintenance ou Hors service |
+| `date_ajout` | TEXT | Date d'enregistrement (format ISO) |
 
----
+## Choix techniques
 
-## 🛡️ Sécurité
-*   **Injections SQL :** Protection via l'utilisation systématique de requêtes paramétrées (placeholders `?`)[cite: 4].
-*   **Gestion des ressources :** Utilisation de **Context Managers** (`with sqlite3.connect...`) pour garantir la fermeture propre de la base de données même en cas d'erreur[cite: 4].
+- **Requêtes paramétrées** (`?`) pour toutes les requêtes SQL, ce qui protège des injections. Les caractères `%` et `_` saisis dans la recherche sont échappés.
+- **Connexions toujours fermées** grâce à `contextlib.closing`. Un simple `with sqlite3.connect()` valide la transaction mais ne ferme pas la connexion.
+- **Séparation données / interface** : les fonctions `ajouter_materiel`, `modifier_materiel`, `charger_inventaire`… ne dépendent pas de Tkinter.
+- **Validation** des champs (désignation obligatoire, catégorie et état parmi les valeurs autorisées).
 
----
+## Structure
 
-## 💡 Où inclure des captures d'écran ?
+```
+Patrimoine.py            Application : accès aux données + interface Tkinter
+tests/test_patrimoine.py Tests unitaires (unittest)
+docs/capture.png         Capture d'écran
+Documentation/           Manuel utilisateur et manuel technique (.docx)
+```
 
-Pour un rendu professionnel, je te conseille d'inclure des captures aux endroits suivants :
+## Auteur
 
-1.  **Sous le titre (Section "Captures d'écran") :** Mets une image de la fenêtre principale avec des données déjà saisies. C'est ce qui donne envie d'utiliser l'outil.
-2.  **Dans la section "Fonctionnalités" :** Tu peux ajouter des petites captures spécifiques :
-    *   Une image montrant la **barre de recherche** filtrant un élément.
-    *   Une image de la **boîte de dialogue de confirmation** lors de la suppression.
-3.  **Dans la section "Installation" :** Si tu as un message de succès lors de l'export CSV, mets une capture de l'explorateur de fichiers montrant le fichier `inventaire_export.csv` créé.
+**Kilian Carasco** — étudiant en Bachelor Concepteur Développeur d'Applications (EPSI Bordeaux)
+[GitHub](https://github.com/Vador634) · [LinkedIn](https://linkedin.com/in/Kilian-Carasco)

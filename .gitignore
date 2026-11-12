@@ -1,0 +1,5 @@
+# Base locale et exports generes par l application
+inventaire.db
+*.csv
+__pycache__/
+*.pyc

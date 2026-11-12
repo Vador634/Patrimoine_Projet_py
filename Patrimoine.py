@@ -1,304 +1,366 @@
-import sqlite3
-import datetime
-import tkinter as tk
-from tkinter import ttk, messagebox
+"""
+PyAsset — gestion du patrimoine informatique.
+
+Application de bureau (Tkinter + SQLite) pour inventorier le matériel d'une
+organisation : ajout, modification, suppression, recherche, filtre par
+catégorie, tri des colonnes et export CSV compatible Excel.
+
+Le fichier est organisé en deux parties :
+  1. Accès aux données : fonctions indépendantes de l'interface (testables).
+  2. Interface graphique : classe Application.
+
+Lancement : python Patrimoine.py
+"""
+
 import csv
+import datetime
+import sqlite3
+import tkinter as tk
+import unicodedata
+from contextlib import closing
+from pathlib import Path
+from tkinter import filedialog, messagebox, ttk
 
-# Nom de la base de données SQLite
-BASE_DONNEES = "inventaire.db"
+# La base est créée à côté du script, quel que soit le dossier de lancement.
+BASE_DONNEES = Path(__file__).resolve().parent / "inventaire.db"
+
+CATEGORIES = ("PC", "Portable", "Tablette", "Réseau", "Imprimante", "Autre")
+ETATS = ("Neuf", "Utilisé", "Maintenance", "Hors service")
+LONGUEUR_MAX_DESIGNATION = 100
 
 
-def init_db():
-    """Initialiser la base de données SQLite et créer la table materiel si elle n'existe pas.
+# =====================================================================
+# 1. ACCÈS AUX DONNÉES
+# =====================================================================
 
-    Cette fonction établit une connexion à la base de données 'inventaire.db' en utilisant
-    un gestionnaire de contexte (with sqlite3.connect...), ce qui garantit que la connexion
-    est automatiquement fermée même en cas d'erreur. Elle utilise la commande SQL
-    CREATE TABLE IF NOT EXISTS pour créer la table 'materiel' avec les colonnes suivantes :
-    - id_materiel : clé primaire auto-incrémentée (INTEGER PRIMARY KEY AUTOINCREMENT),
-      ce qui signifie que SQLite génère automatiquement un numéro unique pour chaque nouvel enregistrement.
-    - designation : texte non nul pour la désignation du matériel.
-    - categorie : texte non nul pour la catégorie (PC, Tablette, Réseau).
-    - etat : texte non nul pour l'état (Neuf, Utilisé, Maintenance).
-    - date_ajout : texte non nul pour la date d'ajout au format ISO (YYYY-MM-DDTHH:MM:SS).
+def connexion(chemin=BASE_DONNEES):
+    """Ouvre une connexion SQLite qui sera fermée à la sortie du bloc `with`.
 
-    Après l'exécution de la requête, conn.commit() valide les changements dans la base de données.
-    Le with ferme automatiquement la connexion.
+    Attention : `with sqlite3.connect(...)` seul valide ou annule la
+    transaction mais ne ferme PAS la connexion. `closing()` garantit la
+    fermeture (important sous Windows, où un fichier ouvert reste verrouillé).
     """
-    with sqlite3.connect(BASE_DONNEES) as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
+    return closing(sqlite3.connect(chemin))
+
+
+def init_db(chemin=BASE_DONNEES):
+    """Crée la table `materiel` si elle n'existe pas encore."""
+    with connexion(chemin) as conn, conn:
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS materiel (
                 id_materiel INTEGER PRIMARY KEY AUTOINCREMENT,
                 designation TEXT NOT NULL,
-                categorie TEXT NOT NULL,
-                etat TEXT NOT NULL,
-                date_ajout TEXT NOT NULL
+                categorie   TEXT NOT NULL,
+                etat        TEXT NOT NULL,
+                date_ajout  TEXT NOT NULL
             )
         """)
-        conn.commit()
 
 
-def charger_inventaire():
-    """Charger tous les matériels depuis la base de données SQLite, triés par id_materiel décroissant.
+def _echapper_like(texte):
+    """Échappe les caractères spéciaux de LIKE (% et _) saisis par l'utilisateur."""
+    return texte.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
-    Cette fonction se connecte à la base de données en utilisant un gestionnaire de contexte,
-    exécute une requête SELECT * FROM materiel ORDER BY id_materiel DESC pour récupérer
-    toutes les lignes triées (les plus récents en premier). La commande cursor.execute() prépare
-    et exécute la requête SQL. Ensuite, cursor.fetchall() récupère toutes les lignes résultantes
-    sous forme de liste de tuples. Le with ferme automatiquement la connexion.
+
+def charger_inventaire(recherche="", categorie=None, chemin=BASE_DONNEES):
+    """Retourne les matériels (du plus récent au plus ancien).
+
+    - recherche : texte contenu dans la désignation (insensible à la casse)
+    - categorie : ne garder qu'une catégorie (None = toutes)
+    Chaque ligne est un tuple (id, designation, categorie, etat, date_ajout).
     """
-    with sqlite3.connect(BASE_DONNEES) as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM materiel ORDER BY id_materiel DESC")
-        rows = cursor.fetchall()
-    return rows
+    requete = "SELECT id_materiel, designation, categorie, etat, date_ajout FROM materiel WHERE 1 = 1"
+    parametres = []
+    if recherche.strip():
+        requete += " AND designation LIKE ? ESCAPE '\\'"
+        parametres.append(f"%{_echapper_like(recherche.strip())}%")
+    if categorie:
+        requete += " AND categorie = ?"
+        parametres.append(categorie)
+    requete += " ORDER BY id_materiel DESC"
+
+    with connexion(chemin) as conn:
+        return conn.execute(requete, parametres).fetchall()
 
 
-def rechercher_materiels(query):
-    """Rechercher les matériels dont la désignation contient la chaîne query, triés par id_materiel décroissant.
-
-    Cette fonction utilise une requête SELECT avec LIKE pour filtrer sur la désignation.
-    Le paramètre query est entouré de % pour une recherche partielle (contient).
-    Utilise un gestionnaire de contexte pour la connexion.
-    """
-    with sqlite3.connect(BASE_DONNEES) as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM materiel WHERE designation LIKE ? ORDER BY id_materiel DESC", ('%' + query + '%',))
-        rows = cursor.fetchall()
-    return rows
-
-
-def actualiser_liste(rows=None):
-    """Mettre à jour l'affichage du Treeview avec les éléments fournis ou tous si None.
-
-    Cette fonction vide d'abord le Treeview avec tree.delete(*tree.get_children()),
-    puis insère chaque ligne. Pour la date, elle convertit le format ISO en 'JJ/MM/AAAA HH:mm'
-    en utilisant datetime.fromisoformat() et strftime(). Chaque 'row' est un tuple
-    (id, designation, categorie, etat, date_ajout).
-    """
-    for item in tree.get_children():
-        tree.delete(item)
-    if rows is None:
-        rows = charger_inventaire()
-    for row in rows:
-        id_m, designation, categorie, etat, date_iso = row
-        # Formater la date lisible
-        try:
-            date_obj = datetime.datetime.fromisoformat(date_iso)
-            date_lisible = date_obj.strftime('%d/%m/%Y %H:%M')
-        except ValueError:
-            date_lisible = date_iso  # Si format invalide, garder brut
-        tree.insert("", "end", values=(id_m, designation, categorie, etat, date_lisible))
-
-
-def ajouter_materiel():
-    """Ajouter un nouveau matériel à la base de données.
-
-    On récupère les valeurs des champs de saisie, on vérifie que la désignation n'est pas vide.
-    On obtient la date actuelle avec datetime.datetime.now().isoformat() pour la date_ajout.
-    On utilise un gestionnaire de contexte pour la connexion DB, on exécute une requête
-    INSERT INTO materiel (designation, categorie, etat, date_ajout) VALUES (?, ?, ?, ?)
-    en utilisant des paramètres pour éviter les injections SQL. cursor.execute() prépare
-    la requête avec les placeholders ?, puis les valeurs sont passées en tuple.
-    conn.commit() valide l'insertion. Le with ferme automatiquement la connexion.
-    Enfin, on actualise la liste et on réinitialise les champs.
-    """
-    designation = entree_designation.get().strip()
-    categorie = variable_categorie.get()
-    etat = variable_etat.get()
-
+def _valider(designation, categorie, etat):
+    """Vérifie les champs saisis et retourne la désignation nettoyée."""
+    designation = (designation or "").strip()
     if not designation:
-        messagebox.showwarning("Champ vide", "Veuillez saisir une désignation de matériel.")
-        return
-
-    date_ajout = datetime.datetime.now().isoformat()
-
-    with sqlite3.connect(BASE_DONNEES) as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO materiel (designation, categorie, etat, date_ajout)
-            VALUES (?, ?, ?, ?)
-        """, (designation, categorie, etat, date_ajout))
-        conn.commit()
-
-    actualiser_liste()
-
-    entree_designation.delete(0, tk.END)
-    variable_categorie.set("PC")
-    variable_etat.set("Neuf")
+        raise ValueError("Veuillez saisir une désignation de matériel.")
+    if len(designation) > LONGUEUR_MAX_DESIGNATION:
+        raise ValueError(f"La désignation ne doit pas dépasser {LONGUEUR_MAX_DESIGNATION} caractères.")
+    if categorie not in CATEGORIES:
+        raise ValueError(f"Catégorie inconnue : {categorie}")
+    if etat not in ETATS:
+        raise ValueError(f"État inconnu : {etat}")
+    return designation
 
 
-def supprimer_element():
-    """Supprimer le matériel sélectionné dans le Treeview.
+def ajouter_materiel(designation, categorie, etat, chemin=BASE_DONNEES):
+    """Ajoute un matériel et retourne son identifiant (requête paramétrée)."""
+    designation = _valider(designation, categorie, etat)
+    date_ajout = datetime.datetime.now().isoformat(timespec="seconds")
+    with connexion(chemin) as conn, conn:
+        curseur = conn.execute(
+            "INSERT INTO materiel (designation, categorie, etat, date_ajout) VALUES (?, ?, ?, ?)",
+            (designation, categorie, etat, date_ajout),
+        )
+        return curseur.lastrowid
 
-    Cette fonction permet de supprimer un élément de la base de données en récupérant l'ID
-    de la ligne sélectionnée dans le Treeview. Elle inclut une confirmation pour éviter
-    les suppressions accidentelles.
 
-    Étapes détaillées :
-    1. Récupération de la sélection : tree.selection() retourne une liste des IDs des éléments
-       sélectionnés dans le Treeview. Si aucune ligne n'est sélectionnée, on affiche un message
-       d'information et on quitte la fonction.
-    2. Extraction de l'ID : Pour la première sélection (selection[0]), on utilise tree.item()
-       pour obtenir les détails de l'élément, puis item['values'][0] donne la valeur de la
-       première colonne, qui est l'id_materiel (clé primaire).
-    3. Confirmation utilisateur : On affiche une boîte de dialogue de confirmation avec
-       messagebox.askyesno(). Si l'utilisateur annule, on quitte sans supprimer.
-    4. Connexion à la base de données : On ouvre une connexion SQLite avec sqlite3.connect(BASE_DONNEES).
-    5. Exécution de la requête SQL : cursor.execute("DELETE FROM materiel WHERE id_materiel = ?", (id_materiel,))
-       prépare et exécute la requête DELETE. Le placeholder ? est remplacé par id_materiel pour
-       éviter les injections SQL. Cette commande supprime la ligne correspondante dans la table 'materiel'.
-    6. Validation des changements : conn.commit() est essentiel pour appliquer la suppression
-       de manière permanente dans le fichier de base de données SQLite. Sans commit, les changements
-       ne seraient pas sauvegardés.
-    7. Fermeture de la connexion : conn.close() libère les ressources.
-    8. Rafraîchissement de l'affichage : actualiser_liste() vide le Treeview (tree.delete(*tree.get_children()))
-       et recharge toutes les données depuis la base avec charger_inventaire(), puis insère les lignes
-       mises à jour dans le Treeview avec tree.insert().
+def modifier_materiel(id_materiel, designation, categorie, etat, chemin=BASE_DONNEES):
+    """Met à jour un matériel. Retourne True si une ligne a été modifiée."""
+    designation = _valider(designation, categorie, etat)
+    with connexion(chemin) as conn, conn:
+        curseur = conn.execute(
+            "UPDATE materiel SET designation = ?, categorie = ?, etat = ? WHERE id_materiel = ?",
+            (designation, categorie, etat, id_materiel),
+        )
+        return curseur.rowcount == 1
+
+
+def supprimer_materiels(ids, chemin=BASE_DONNEES):
+    """Supprime plusieurs matériels en une transaction. Retourne le nombre supprimé."""
+    ids = [int(i) for i in ids]
+    if not ids:
+        return 0
+    with connexion(chemin) as conn, conn:
+        curseur = conn.executemany("DELETE FROM materiel WHERE id_materiel = ?", [(i,) for i in ids])
+        return curseur.rowcount
+
+
+def cle_tri(valeur):
+    """Clé de tri insensible à la casse et aux accents ("Écran" est rangé avec les "E")."""
+    if isinstance(valeur, (int, float)):
+        return (0, valeur, "")
+    texte = unicodedata.normalize("NFD", str(valeur).lower())
+    return (1, 0, "".join(c for c in texte if not unicodedata.combining(c)))
+
+
+def formater_date(date_iso):
+    """'2026-05-04T14:26:49' -> '04/05/2026 14:26' (texte brut si format inconnu)."""
+    try:
+        return datetime.datetime.fromisoformat(date_iso).strftime("%d/%m/%Y %H:%M")
+    except (TypeError, ValueError):
+        return date_iso
+
+
+def exporter_csv(lignes, fichier):
+    """Écrit les lignes dans un CSV lisible directement par Excel en français.
+
+    - encodage utf-8-sig : le BOM permet à Excel d'afficher les accents
+    - séparateur ';' : séparateur attendu par Excel en paramètres régionaux français
     """
-    # Étape 1 : Vérifier s'il y a une sélection
-    selection = tree.selection()
-    if not selection:
-        messagebox.showinfo("Aucune sélection", "Veuillez sélectionner un matériel à supprimer.")
-        return
-
-    # Étape 2 : Récupérer l'ID de la ligne sélectionnée
-    item = tree.item(selection[0])
-    id_materiel = item['values'][0]  # values[0] correspond à la colonne ID
-
-    # Étape 3 : Demander confirmation à l'utilisateur
-    confirmation = messagebox.askyesno(
-        "Confirmer la suppression",
-        "Voulez-vous vraiment supprimer le matériel sélectionné ?"
-    )
-    if not confirmation:
-        return
-
-    # Étape 4 : Se connecter à la base de données avec gestionnaire de contexte
-    with sqlite3.connect(BASE_DONNEES) as conn:
-        cursor = conn.cursor()
-
-        # Étape 5 : Exécuter la requête DELETE
-        cursor.execute("DELETE FROM materiel WHERE id_materiel = ?", (id_materiel,))
-
-        # Étape 6 : Valider les changements dans la base de données
-        conn.commit()
-
-    # Étape 7 : Fermeture automatique avec with
-    # Étape 8 : Rafraîchir l'affichage du Treeview
-    actualiser_liste()
+    with open(fichier, "w", newline="", encoding="utf-8-sig") as fichier_csv:
+        writer = csv.writer(fichier_csv, delimiter=";")
+        writer.writerow(["ID", "Désignation", "Catégorie", "État", "Date d'ajout"])
+        for id_m, designation, categorie, etat, date_iso in lignes:
+            writer.writerow([id_m, designation, categorie, etat, formater_date(date_iso)])
+    return len(lignes)
 
 
-def export_csv():
-    """Exporter le contenu actuel de la base de données vers un fichier CSV.
+# =====================================================================
+# 2. INTERFACE GRAPHIQUE
+# =====================================================================
 
-    Cette fonction charge tous les matériels, ouvre un fichier 'inventaire_export.csv'
-    en mode écriture, et utilise csv.writer pour écrire les en-têtes puis les lignes.
-    Le fichier est compatible avec Excel.
-    """
-    rows = charger_inventaire()
-    with open("inventaire_export.csv", "w", newline="", encoding="utf-8") as fichier_csv:
-        writer = csv.writer(fichier_csv)
-        # Écrire les en-têtes
-        writer.writerow(["ID", "Désignation", "Catégorie", "État", "Date ajout"])
-        # Écrire les données
-        for row in rows:
-            writer.writerow(row)
-    messagebox.showinfo("Export réussi", "Le fichier 'inventaire_export.csv' a été créé.")
+class Application(tk.Tk):
+    COLONNES = ("ID", "Désignation", "Catégorie", "État", "Date d'ajout")
+    TOUTES = "Toutes les catégories"
+
+    def __init__(self, chemin=BASE_DONNEES):
+        super().__init__()
+        self.chemin = chemin
+        self.id_en_edition = None          # id du matériel chargé dans le formulaire
+        self.tri = ("ID", True)            # colonne et ordre décroissant
+
+        self.title("PyAsset — Gestion du patrimoine informatique")
+        self.geometry("860x640")
+        self.minsize(720, 520)
+
+        init_db(self.chemin)
+        self._construire_formulaire()
+        self._construire_recherche()
+        self._construire_tableau()
+        self._construire_boutons()
+        self.actualiser()
+        self.entree_designation.focus_set()
+
+    # ---------- Construction de l'interface ----------
+
+    def _construire_formulaire(self):
+        cadre = ttk.LabelFrame(self, text="Matériel", padding=10)
+        cadre.pack(fill=tk.X, padx=10, pady=(10, 5))
+
+        ttk.Label(cadre, text="Désignation :").grid(row=0, column=0, sticky="w", pady=4)
+        self.entree_designation = ttk.Entry(cadre, width=45)
+        self.entree_designation.grid(row=0, column=1, columnspan=3, sticky="we", pady=4)
+        self.entree_designation.bind("<Return>", lambda e: self.valider_formulaire())
+
+        ttk.Label(cadre, text="Catégorie :").grid(row=1, column=0, sticky="w", pady=4)
+        self.variable_categorie = tk.StringVar(value=CATEGORIES[0])
+        ttk.Combobox(cadre, textvariable=self.variable_categorie, values=CATEGORIES,
+                     state="readonly", width=18).grid(row=1, column=1, sticky="w", pady=4)
+
+        ttk.Label(cadre, text="État :").grid(row=1, column=2, sticky="e", padx=(15, 5), pady=4)
+        self.variable_etat = tk.StringVar(value=ETATS[0])
+        ttk.Combobox(cadre, textvariable=self.variable_etat, values=ETATS,
+                     state="readonly", width=18).grid(row=1, column=3, sticky="w", pady=4)
+
+        self.bouton_valider = ttk.Button(cadre, text="Ajouter", command=self.valider_formulaire)
+        self.bouton_valider.grid(row=0, column=4, rowspan=2, padx=(15, 5), sticky="ns")
+        self.bouton_annuler = ttk.Button(cadre, text="Nouveau", command=self.vider_formulaire)
+        self.bouton_annuler.grid(row=0, column=5, rowspan=2, sticky="ns")
+        cadre.columnconfigure(1, weight=1)
+
+    def _construire_recherche(self):
+        cadre = ttk.Frame(self, padding=(10, 5))
+        cadre.pack(fill=tk.X)
+        ttk.Label(cadre, text="Rechercher :").pack(side=tk.LEFT)
+        self.variable_recherche = tk.StringVar()
+        self.variable_recherche.trace_add("write", lambda *a: self.actualiser())
+        ttk.Entry(cadre, textvariable=self.variable_recherche, width=35).pack(side=tk.LEFT, padx=5)
+
+        self.variable_filtre = tk.StringVar(value=self.TOUTES)
+        filtre = ttk.Combobox(cadre, textvariable=self.variable_filtre, values=(self.TOUTES,) + CATEGORIES,
+                              state="readonly", width=22)
+        filtre.pack(side=tk.LEFT, padx=5)
+        filtre.bind("<<ComboboxSelected>>", lambda e: self.actualiser())
+
+    def _construire_tableau(self):
+        cadre = ttk.Frame(self, padding=(10, 0))
+        cadre.pack(fill=tk.BOTH, expand=True)
+
+        self.tree = ttk.Treeview(cadre, columns=self.COLONNES, show="headings", selectmode="extended")
+        largeurs = {"ID": 60, "Désignation": 300, "Catégorie": 120, "État": 120, "Date d'ajout": 140}
+        for colonne in self.COLONNES:
+            self.tree.heading(colonne, text=colonne, command=lambda c=colonne: self.trier_par(c))
+            self.tree.column(colonne, width=largeurs[colonne], anchor="w" if colonne == "Désignation" else "center")
+        self.tree.tag_configure("maintenance", foreground="#b45309")
+        self.tree.tag_configure("hors_service", foreground="#b91c1c")
+
+        barre = ttk.Scrollbar(cadre, orient=tk.VERTICAL, command=self.tree.yview)
+        self.tree.configure(yscrollcommand=barre.set)
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        barre.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.tree.bind("<<TreeviewSelect>>", self.charger_selection)
+        self.tree.bind("<Delete>", lambda e: self.supprimer_selection())
+
+    def _construire_boutons(self):
+        cadre = ttk.Frame(self, padding=10)
+        cadre.pack(fill=tk.X)
+        ttk.Button(cadre, text="Supprimer la sélection", command=self.supprimer_selection).pack(side=tk.LEFT)
+        ttk.Button(cadre, text="Exporter en CSV", command=self.exporter).pack(side=tk.LEFT, padx=10)
+        self.statut = ttk.Label(cadre, text="")
+        self.statut.pack(side=tk.RIGHT)
+
+    # ---------- Affichage ----------
+
+    def lignes_affichees(self):
+        filtre = self.variable_filtre.get()
+        return charger_inventaire(self.variable_recherche.get(), None if filtre == self.TOUTES else filtre, self.chemin)
+
+    def actualiser(self):
+        """Recharge le tableau en conservant la recherche, le filtre et le tri."""
+        lignes = self.lignes_affichees()
+        colonne, decroissant = self.tri
+        index = self.COLONNES.index(colonne)
+        lignes.sort(key=lambda l: cle_tri(l[index]), reverse=decroissant)
+
+        self.tree.delete(*self.tree.get_children())
+        for id_m, designation, categorie, etat, date_iso in lignes:
+            tag = {"Maintenance": "maintenance", "Hors service": "hors_service"}.get(etat, "")
+            self.tree.insert("", tk.END, iid=str(id_m), tags=(tag,),
+                             values=(id_m, designation, categorie, etat, formater_date(date_iso)))
+
+        total = len(charger_inventaire(chemin=self.chemin))
+        en_maintenance = sum(1 for l in lignes if l[3] == "Maintenance")
+        self.statut.config(text=f"{len(lignes)} affiché(s) sur {total} · {en_maintenance} en maintenance")
+
+    def trier_par(self, colonne):
+        colonne_actuelle, decroissant = self.tri
+        self.tri = (colonne, not decroissant if colonne == colonne_actuelle else False)
+        for c in self.COLONNES:
+            fleche = (" ▼" if self.tri[1] else " ▲") if c == colonne else ""
+            self.tree.heading(c, text=c + fleche)
+        self.actualiser()
+
+    # ---------- Actions ----------
+
+    def charger_selection(self, event=None):
+        """Une seule ligne sélectionnée : ses valeurs passent dans le formulaire pour modification."""
+        selection = self.tree.selection()
+        if len(selection) != 1:
+            return
+        id_m, designation, categorie, etat, _ = self.tree.item(selection[0], "values")
+        self.id_en_edition = int(id_m)
+        self.entree_designation.delete(0, tk.END)
+        self.entree_designation.insert(0, designation)
+        self.variable_categorie.set(categorie if categorie in CATEGORIES else CATEGORIES[-1])
+        self.variable_etat.set(etat if etat in ETATS else ETATS[0])
+        self.bouton_valider.config(text="Enregistrer")
+        self.bouton_annuler.config(text="Annuler")
+
+    def vider_formulaire(self):
+        self.id_en_edition = None
+        self.entree_designation.delete(0, tk.END)
+        self.variable_categorie.set(CATEGORIES[0])
+        self.variable_etat.set(ETATS[0])
+        self.bouton_valider.config(text="Ajouter")
+        self.bouton_annuler.config(text="Nouveau")
+        self.tree.selection_remove(*self.tree.selection())
+        self.entree_designation.focus_set()
+
+    def valider_formulaire(self):
+        """Ajoute un matériel, ou enregistre la modification du matériel sélectionné."""
+        valeurs = (self.entree_designation.get(), self.variable_categorie.get(), self.variable_etat.get())
+        try:
+            if self.id_en_edition is None:
+                ajouter_materiel(*valeurs, chemin=self.chemin)
+            else:
+                modifier_materiel(self.id_en_edition, *valeurs, chemin=self.chemin)
+        except ValueError as erreur:
+            messagebox.showwarning("Saisie invalide", str(erreur), parent=self)
+            return
+        except sqlite3.Error as erreur:
+            messagebox.showerror("Base de données", f"Enregistrement impossible : {erreur}", parent=self)
+            return
+        self.vider_formulaire()
+        self.actualiser()
+
+    def supprimer_selection(self):
+        ids = [int(i) for i in self.tree.selection()]
+        if not ids:
+            messagebox.showinfo("Aucune sélection", "Sélectionnez un ou plusieurs matériels à supprimer.", parent=self)
+            return
+        if not messagebox.askyesno("Confirmer la suppression",
+                                   f"Supprimer définitivement {len(ids)} matériel(s) ?", parent=self):
+            return
+        supprimer_materiels(ids, self.chemin)
+        self.vider_formulaire()
+        self.actualiser()
+
+    def exporter(self):
+        """Exporte les lignes actuellement affichées (recherche et filtre appliqués)."""
+        fichier = filedialog.asksaveasfilename(
+            parent=self, title="Exporter l'inventaire", defaultextension=".csv",
+            initialfile=f"inventaire_{datetime.date.today():%Y-%m-%d}.csv",
+            filetypes=[("Fichier CSV", "*.csv")],
+        )
+        if not fichier:
+            return
+        try:
+            nombre = exporter_csv(self.lignes_affichees(), fichier)
+        except OSError as erreur:
+            messagebox.showerror("Export impossible", str(erreur), parent=self)
+            return
+        messagebox.showinfo("Export réussi", f"{nombre} matériel(s) exporté(s) dans :\n{fichier}", parent=self)
 
 
-def rechercher(event=None):
-    """Fonction appelée lors de la frappe dans la barre de recherche.
-
-    Récupère le texte de l'Entry, appelle rechercher_materiels, puis actualiser_liste avec les résultats filtrés.
-    """
-    query = entree_recherche.get().strip()
-    if query:
-        rows = rechercher_materiels(query)
-    else:
-        rows = None  # Charger tous
-    actualiser_liste(rows)
+def main():
+    Application().mainloop()
 
 
-# Création de la fenêtre principale Tkinter
-fenetre = tk.Tk()
-fenetre.title("Gestion de patrimoine informatique")
-fenetre.geometry("800x650")  # Hauteur augmentée pour afficher tous les éléments
-fenetre.resizable(True, True)  # Permettre le redimensionnement manuel avec la souris
-
-# Cadre principal pour organiser les widgets
-cadre_principal = tk.Frame(fenetre, padx=10, pady=10)
-cadre_principal.pack(fill=tk.BOTH, expand=True)
-
-# --- Zone de saisie du matériel ---
-label_titre = tk.Label(cadre_principal, text="Ajouter un nouveau matériel", font=("Arial", 14, "bold"))
-label_titre.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 10))
-
-label_designation = tk.Label(cadre_principal, text="Désignation :")
-label_designation.grid(row=1, column=0, sticky="w", pady=5)
-entree_designation = tk.Entry(cadre_principal, width=40)
-entree_designation.grid(row=1, column=1, sticky="w", pady=5)
-
-label_categorie = tk.Label(cadre_principal, text="Catégorie :")
-label_categorie.grid(row=2, column=0, sticky="w", pady=5)
-variable_categorie = tk.StringVar(value="PC")
-option_categorie = tk.OptionMenu(cadre_principal, variable_categorie, "PC", "Tablette", "Réseau")
-option_categorie.config(width=15)
-option_categorie.grid(row=2, column=1, sticky="w", pady=5)
-
-label_etat = tk.Label(cadre_principal, text="État :")
-label_etat.grid(row=3, column=0, sticky="w", pady=5)
-variable_etat = tk.StringVar(value="Neuf")
-option_etat = tk.OptionMenu(cadre_principal, variable_etat, "Neuf", "Utilisé", "Maintenance")
-option_etat.config(width=15)
-option_etat.grid(row=3, column=1, sticky="w", pady=5)
-
-bouton_ajouter = tk.Button(cadre_principal, text="Ajouter", width=15, command=ajouter_materiel)
-bouton_ajouter.grid(row=4, column=0, columnspan=2, pady=15)
-
-# --- Barre de recherche ---
-label_recherche = tk.Label(cadre_principal, text="Rechercher par désignation :")
-label_recherche.grid(row=5, column=0, sticky="w", pady=5)
-entree_recherche = tk.Entry(cadre_principal, width=40)
-entree_recherche.grid(row=5, column=1, sticky="w", pady=5)
-entree_recherche.bind("<KeyRelease>", rechercher)
-
-# --- Zone d'affichage de l'inventaire ---
-label_inventaire = tk.Label(cadre_principal, text="Inventaire du matériel", font=("Arial", 14, "bold"))
-label_inventaire.grid(row=6, column=0, columnspan=2, sticky="w", pady=(20, 10))
-
-# Treeview pour afficher le tableau avec colonnes
-tree = ttk.Treeview(cadre_principal, columns=("ID", "Désignation", "Catégorie", "État", "Date ajout"), show="headings", height=12)
-tree.heading("ID", text="ID")
-tree.heading("Désignation", text="Désignation")
-tree.heading("Catégorie", text="Catégorie")
-tree.heading("État", text="État")
-tree.heading("Date ajout", text="Date ajout")
-
-# Définir la largeur des colonnes
-tree.column("ID", width=50, anchor="center")
-tree.column("Désignation", width=200, anchor="w")
-tree.column("Catégorie", width=100, anchor="center")
-tree.column("État", width=100, anchor="center")
-tree.column("Date ajout", width=150, anchor="center")
-
-tree.grid(row=7, column=0, columnspan=2, sticky="w", pady=5)
-
-# Scrollbar pour le Treeview
-scrollbar = ttk.Scrollbar(cadre_principal, orient=tk.VERTICAL, command=tree.yview)
-scrollbar.grid(row=7, column=2, sticky="ns", pady=5)
-tree.configure(yscrollcommand=scrollbar.set)
-
-bouton_supprimer = tk.Button(cadre_principal, text="Supprimer sélection", width=20, command=supprimer_element)
-bouton_supprimer.grid(row=8, column=0, pady=15)
-
-bouton_exporter = tk.Button(cadre_principal, text="Exporter en CSV", width=20, command=export_csv)
-bouton_exporter.grid(row=8, column=1, pady=15)
-
-# Initialisation de la base de données et chargement initial
-init_db()
-actualiser_liste()
-
-# Boucle principale de l'interface graphique
-fenetre.mainloop()
+if __name__ == "__main__":
+    main()
